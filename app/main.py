@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
 from PIL import Image
@@ -28,15 +28,41 @@ def compose_images(data: ImageComposeRequest):
     except Exception as e:
         return {"error": "Falha ao decodificar imagem base", "details": str(e)}
     
+    bx, by = base_img.size
+
     # Sobrepõe as imagens
     for overlay in data.imagens:
         overlay_path = os.path.join(ASSETS_FOLDER, overlay.image + ".png")
         if os.path.exists(overlay_path):
             try:
-                with Image.open(overlay_path).convert("RGBA") as ov_img:
-                    base_img.alpha_composite(ov_img, dest=(overlay.x, overlay.y))
+                with Image.open(overlay_path) as ov_img:
+                    ov_img = ov_img.convert('RGBA')
+                    ow, oh = ov_img.size
+                    x, y = overlay.x, overlay.y
+
+                    # Define área disponível para o overlay
+                    avail_w = bx - x
+                    avail_h = by - y
+
+                    if avail_w <= 0 or avail_h <= 0:
+                        # Overlay completamente fora da base
+                        continue
+
+                    # Se não cabe, reduz proporcionalmente
+                    scale = min(1.0, avail_w / ow, avail_h / oh)
+                    if scale < 1.0:
+                        new_w = max(1, int(ow * scale))
+                        new_h = max(1, int(oh * scale))
+                        # Pillow 10 ou 9+
+                        if hasattr(Image, "Resampling"):  # Pillow >= 9
+                            resample = Image.Resampling.LANCZOS
+                        else:
+                            resample = Image.LANCZOS
+                        ov_img = ov_img.resize((new_w, new_h), resample)
+
+                    base_img.alpha_composite(ov_img, dest=(x, y))
             except Exception as e:
-                # Não para o processo se algum overlay falhar
+                print(f"Falha ao aplicar {overlay.image}: {e}")
                 continue
 
     # Salva o resultado em base64
